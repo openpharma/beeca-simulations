@@ -1,0 +1,262 @@
+---
+title: "Misspecified scenario"
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r}
+source("R/utils/sim_data_utils.R")
+source("R/utils/sim_reporting_utils.R")
+source("R/utils/sim_variance_estimators.R")
+```
+
+## Misspecified scenario
+
+We construct a scenario to demonstrate that the Ge et al variance estimation method may under cover for the CPATE estimand when the working model is misspecified. 
+
+As data generating mechanism, we use a simple randomization of 4000 patients using randomization ratio 1:9 to two arms. The logistic model is,
+$$
+\mathrm{logit}\{P(Y_i=1 | A_i, X_i)\}  = -1+ 3 X_i - 6 A_i X_i
+$$
+
+with a strong prognostic (and predictive) covariate $X_i$ following a Bernoulli distribution with probability $0.5$. A large sample size isolates the effect of model misspecification from any small sample size bias. Two features of this scenario expose the issue of model misspecification. Firstly, it is necessary to have unequal randomization. We use 1:9 randomization. Secondly, it is necessary to have a working model which is far from the truth.  We use an extreme scenario, where the true treatment effect is a conditional odds ratio of $1$ when $X=0$ and a conditional odds ratio of $403$ when $X=1$. The working model is $\mathrm{logit}\{P(Y_i=1 | A_i, X_i)\}  = \beta_0 + \beta_1 A_i + \beta_2 X_i$, which assumes a constant conditional odds ratio.
+
+
+
+```{r}
+# Set up scenario
+
+scenarios <- list(
+  list(scenario = 1, 
+       N = 4000,
+       
+       # binary covariate (x) 
+       covars = tibble("name"=c("x"),
+                       "dist"=c("rbinom"),
+                       "arg1"=c(1),
+                       "arg2"=c(0.5)),
+       
+       # 1:9 assignment
+       trt_assignment = 0.1,
+       
+       # outcome model 
+       response_func = \(df) -1 - 6 * df$x * df$trt + 3 * df$x,
+       working_model = "y ~ trt + x"
+  )
+)
+
+```
+
+
+### Unconditional coverage
+
+
+```{r}
+
+## Unconditional coverage 
+## PATE, CPATE
+
+## Simulate 10,000 runs
+N_runs <- 1e4
+sims <- Q(run_sim_wrapper, 
+          scenario=rep(scenarios, each=N_runs), 
+          n_jobs = 200)
+sims <- do.call(rbind, sims)
+
+
+var_methods = list("ye_beeca_var",
+                   "ge_hc0_var",
+                   "ge_var")
+
+# PATE 
+post_sims_pate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_pate))
+results_pate <- purrr::map_df(post_sims_pate, sum_sims)
+results_pate$estimand <- "PATE"
+
+
+# CPATE
+post_sims_cpate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_cpate))
+results_cpate <- purrr::map_df(post_sims_cpate, sum_sims)
+results_cpate$estimand <- "CPATE"
+
+```
+
+Results: Unconditional coverage for PATE estimand
+
+```{r}
+dplyr::arrange(results_pate, scenario)
+```
+
+Results: Unconditional coverage for CPATE estimand
+
+```{r}
+dplyr::arrange(results_cpate, scenario)
+```
+
+
+### Coverage conditional on X
+
+
+```{r}
+
+## Conditional coverage (conditional only on X)
+## PATE, CPATE
+
+#===============================================================================
+## simulate a base dataset that remains fixed
+## we fix X, but simulate TRT and y
+## (achieved by dropping trt and y from base_data so they are re-simulated each time)
+
+all_res_pate <- list()
+all_res_cpate <- list()
+i <- 1
+
+for (rseed in c(85, 67)) {
+  
+  set.seed(rseed)
+  
+  base_data <- sim_dat(scenarios[[1]])
+  base_data <- base_data %>% select(-trt, -y)
+  
+  #=============================================================================
+  
+  ## Simulate 10,000 runs
+  N_runs <- 1e4
+  sims <- Q(run_sim_wrapper, 
+            scenario=rep(scenarios, each=N_runs), 
+            const = list(base_data = base_data), 
+            n_jobs = 200)
+  sims <- do.call(rbind, sims)
+  
+  var_methods = list("ye_beeca_var",
+                     "ge_hc0_var",
+                     "ge_var")
+  
+  # PATE with conditional coverage (conditional on X)
+  post_sims_pate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_pate))
+  results_pate <- purrr::map_df(post_sims_pate, sum_sims)
+  results_pate$seed <- rseed
+  results_pate$estimand <- "PATE"
+  
+  
+  # CPATE with conditional coverage (conditional on X)
+  post_sims_cpate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_cpate))
+  results_cpate <- purrr::map_df(post_sims_cpate, sum_sims)
+  results_cpate$seed <- rseed
+  results_cpate$estimand <- "CPATE"
+  
+  
+  all_res_pate[[i]] <- results_pate
+  all_res_cpate[[i]] <- results_cpate
+  
+  i <- i + 1
+  
+}
+
+multi_res_pate <- do.call(rbind, all_res_pate)
+multi_res_cpate <- do.call(rbind, all_res_cpate)
+
+
+```
+
+Results: Conditional coverage on X, for PATE estimand
+
+```{r}
+multi_res_pate
+```
+
+Results: Conditional coverage on X, for CPATE estimand
+
+```{r}
+multi_res_cpate
+```
+
+
+### Coverage conditional on A, X
+
+
+```{r}
+
+## Conditional coverage (conditional on X and TRT)
+## PATE, CPATE
+
+#===============================================================================
+## simulate a base dataset that remains fixed
+## we fix X and TRT, but simulate y
+## (achieved by dropping y from base_data so it is re-simulated each time)
+
+all_res_pate <- list()
+all_res_cpate <- list()
+i <- 1
+
+for (rseed in c(85, 67)) {
+  
+  set.seed(rseed)
+  
+  base_data <- sim_dat(scenarios[[1]])
+  base_data <- base_data %>% select(-y)
+  
+  #=============================================================================
+  
+  ## Simulate 10,000 runs
+  N_runs <- 1e4
+  sims <- Q(run_sim_wrapper, 
+            scenario=rep(scenarios, each=N_runs), 
+            const = list(base_data = base_data), 
+            n_jobs = 200)
+  sims <- do.call(rbind, sims)
+  
+  
+  var_methods = list("ye_beeca_var",
+                     "ge_hc0_var",
+                     "ge_var")
+  
+  # PATE with conditional coverage (conditional on X, TRT)
+  post_sims_pate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_pate))
+  results_pate <- purrr::map_df(post_sims_pate, sum_sims)
+  results_pate$seed <- rseed
+  results_pate$estimand <- "PATE"
+  
+  
+  # CPATE with conditional coverage (conditional on X, TRT)
+  post_sims_cpate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_cpate))
+  results_cpate <- purrr::map_df(post_sims_cpate, sum_sims)
+  results_cpate$seed <- rseed
+  results_cpate$estimand <- "CPATE"
+  
+  
+  all_res_pate[[i]] <- results_pate
+  all_res_cpate[[i]] <- results_cpate
+  
+  i <- i + 1
+  
+}
+
+multi_res_pate <- do.call(rbind, all_res_pate)
+
+multi_res_cpate <- do.call(rbind, all_res_cpate)
+
+```
+
+
+Results: Conditional coverage on A, X, for PATE estimand
+
+```{r}
+multi_res_pate
+```
+
+
+Results: Conditional coverage on A, X, for CPATE estimand
+
+```{r}
+multi_res_cpate
+```
+
+
+
+
+

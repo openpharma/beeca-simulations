@@ -1,0 +1,158 @@
+---
+title: "Plot Ge vs Ye for different scenarios"
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+
+```{r}
+source("R/utils/sim_data_utils.R")
+source("R/utils/sim_reporting_utils.R")
+source("R/utils/sim_variance_estimators.R")
+
+library(ggplot2)
+library(dplyr)
+```
+
+
+
+```{r}
+# Set up three scenarios to compare Ye et al. vs Ge et al.
+
+scenarios <- list(
+  list(scenario = 1, 
+       N = 200,
+       covars = tibble("name"=c("x"),
+                       "dist"=c("rnorm"),
+                       "arg1"=c(0),
+                       "arg2"=c(3)),
+       trt_assignment = 0.5,
+       response_func = \(df) -2 + 5*df$trt + df$x,
+       working_model = "y ~ trt + x"
+  ),
+  
+  list(scenario = 2,
+       N = 200,
+       covars = tibble("name"=c("x"),
+                       "dist"=c("rnorm"),
+                       "arg1"=c(0),
+                       "arg2"=c(3)),
+       trt_assignment = 0.5,
+       response_func = \(df) -2 + 0*df$trt + df$x,
+       working_model = "y ~ trt + x"
+  ),
+  
+  list(scenario = 3,
+       N = 200,
+       covars = tibble("name"=c("x1", "x2", "x3", "x4"),
+                       "dist"=c("rnorm", "rnorm", "rnorm", "rnorm"),
+                       "arg1"=c(0, 0, 0, 0),
+                       "arg2"=c(3, 3, 3, 3)),
+       trt_assignment = 0.5,
+       response_func = \(df) 0 + 0*df$trt + 0*df$x1 + 0*df$x2 + 0*df$x3 + 0*df$x4,
+       working_model = "y ~ trt + x1 + x2 + x3 + x4"
+  )
+)
+```
+
+
+```{r}
+
+# For each scenario, simulate $n_rseeds$ datasets,
+# and calculate Ge et al and Ye et al marginal effect variance estimates
+
+n_rseeds <- 100
+
+res <- tibble(ye_var = numeric(),
+              ge_var = numeric(),
+              sim_rseed = numeric(),
+              sim_name = character())
+
+for (scenario in scenarios) {
+
+  ye_var <- numeric(n_rseeds)
+  ge_var <- numeric(n_rseeds)
+  sim_rseed <- numeric(n_rseeds)
+  sim_name <- scenario$scenario
+  
+  for (i in 1:n_rseeds) {
+    
+    set.seed(i)
+    
+    dat <- sim_dat(scenario)
+    
+    dat$trt <- as.factor(dat$trt)
+    glm_formula <- as.formula(scenario$working_model)
+    fit <- glm(glm_formula, family="binomial", data=dat)
+    
+    ye_var[i] <- beeca_wrapper(fit, "Ye")$marginal_var
+    ge_var[i] <- beeca_wrapper(fit, "Ge")$marginal_var
+    sim_rseed[i] <- i
+    
+  }
+  
+  res <- rbind(res, data.frame(ye_var = ye_var, 
+                               ge_var = ge_var, 
+                               sim_rseed = sim_rseed,
+                               sim_name = sim_name))
+
+}
+  
+```
+
+
+
+```{r}
+
+res_plot <- res %>%
+  group_by(sim_name) %>%
+  
+  # order x axis by ye et al
+  arrange(ye_var) %>%
+  mutate(x_ordered = 1:n_rseeds) %>%
+  ungroup() %>%
+  
+  tidyr::pivot_longer(cols = c("ye_var", "ge_var")) %>%
+  
+  # make labels
+  mutate(name = case_match(name, 
+                           "ye_var" ~ "Ye et al.",
+                           "ge_var" ~ "Ge et al."))
+
+# rename panels in plot
+facet_labeller <- c("1" = "A",
+                    "2" = "B",
+                    "3" = "C")
+
+p <- res_plot %>%
+  ggplot(aes(x=x_ordered, y=value, color=name, shape=name)) +
+    geom_point(size = 2) +
+    facet_wrap(vars(sim_name), scales = "free",
+               labeller = labeller(sim_name = facet_labeller)) +
+    xlab("Simulations ordered by Ye et al variance") +
+    ylab("Variance") +
+    scale_color_grey() +
+    scale_shape(guide = 'none') +
+    guides(color = guide_legend(title=element_blank()),
+           shape = guide_legend(title=element_blank())) +
+    theme_bw(base_size = 14) +
+    theme(legend.text=element_text(size=12))
+
+p
+
+```
+
+
+
+```{r}
+ggsave(filename = "output/plot_three_scenarios_bw.png",
+       width = 11,
+       height = 6,
+       plot = p)
+```
+
+

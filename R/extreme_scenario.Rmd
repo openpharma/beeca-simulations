@@ -1,0 +1,281 @@
+---
+title: "Extreme scenario (Ye et al. 2023)"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r}
+source("R/utils/sim_data_utils.R")
+source("R/utils/sim_reporting_utils.R")
+source("R/utils/sim_variance_estimators.R")
+```
+
+## Extreme scenario
+
+We consider the data generating mechanism from Ye et al. (2023) as an extreme scenario due to very large treatment effect and highly prognostic baseline covariate (odds ratio corresponding to \~150 and \~2.7, respectively).
+
+Specifically, we simulate trials with 200 subjects, a single covariate $X \sim N(0, 3^2)$, two arms with equal allocation and simple randomization, and outcome model
+
+$$
+logit[P(Y_i = 1 | A_i = a_i, X_i = x_i)] = -2 + 5I(a_i=1) + x_i
+$$
+
+In the following we consider a correctly specified working model
+
+$$
+logit[P(Y_i = 1 | A_i = a_i, X_i = x_i)] = b_0 + b_1I(a_i=1) + b_2x_i
+$$
+
+```{r}
+# Set up the Ye et al (2023) scenario
+
+scenarios <- list(
+  list(scenario = 1, 
+       N = 200,
+       covars = tibble("name"=c("x"),
+                       "dist"=c("rnorm"),
+                       "arg1"=c(0),
+                       "arg2"=c(3)),
+       trt_assignment = 0.5,
+       response_func = \(df) -2 + 5*df$trt + df$x,
+       working_model = "y ~ trt + x"
+       )
+  )
+```
+
+
+The true marginal probabilities that Y=1 are calculated below by X and treatment arm using N=10^6:
+
+```{r}
+df <- data.frame(sim_covars(list(), scenarios[[1]], N = 1e6))
+
+# for patients with X value one std dev below mean
+mean(plogis(scenarios[[1]]$response_func(df |>
+                               transform(trt = 0,
+                                         x = mean(x) - sd(x)))))
+
+mean(plogis(scenarios[[1]]$response_func(df |>
+                               transform(trt = 1,
+                                         x = mean(x) - sd(x)))))
+
+# for patients with X value one std dev above mean
+mean(plogis(scenarios[[1]]$response_func(df |>
+                               transform(trt = 0,
+                                         x = mean(x) + sd(x)))))
+
+mean(plogis(scenarios[[1]]$response_func(df |>
+                               transform(trt = 1,
+                                         x = mean(x) + sd(x)))))
+
+```
+
+### Unconditional coverage
+
+We proceed to evaluate the unconditional coverage probabilities of the Ge et al. (2011) and Ye et al. (2023) methods of variance estimation. We consider the PATE estimand, effectively reproducing the simulation study performed by Ye et al. (2023), and additionally also evaluate coverage under the CPATE estimand as defined in Magirr et al (2024).
+
+```{r}
+
+## Unconditional coverage 
+## PATE, CPATE
+
+## Simulate 10,000 runs
+N_runs <- 1e4
+sims <- Q(run_sim_wrapper, 
+          scenario=rep(scenarios, each=N_runs), 
+          n_jobs = 200)
+sims <- do.call(rbind, sims)
+
+
+var_methods = list("ye_beeca_var",
+                   "ge_var")
+
+# PATE 
+post_sims_pate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_pate))
+results_pate <- purrr::map_df(post_sims_pate, sum_sims)
+results_pate$estimand <- "PATE"
+
+
+# CPATE
+post_sims_cpate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_cpate))
+results_cpate <- purrr::map_df(post_sims_cpate, sum_sims)
+results_cpate$estimand <- "CPATE"
+
+```
+
+Results: Unconditional coverage for PATE estimand
+
+```{r}
+dplyr::arrange(results_pate, scenario)
+```
+
+Results: Unconditional coverage for CPATE estimand
+
+```{r}
+dplyr::arrange(results_cpate, scenario)
+```
+
+
+### Coverage conditional on X
+
+We now consider conditional coverage probabilities by fixing the choice of $X$. We achieve this by selecting a specific random seed during data generation. Two random seeds were chosen to illustrate that the conditional coverage probabilities can be both above and below the nominal level depending on the specific $X$.
+
+```{r}
+
+## Conditional coverage (conditional only on X)
+## PATE, CPATE
+
+#===============================================================================
+## simulate a base dataset that remains fixed
+## we fix X, but simulate TRT and y
+## (achieve this by dropping trt and y from base_data so they are re-simulated each time)
+
+all_res_pate <- list()
+all_res_cpate <- list()
+i <- 1
+
+for (rseed in c(281, 44)) {
+
+  set.seed(rseed)
+  
+  base_data <- sim_dat(scenarios[[1]])
+  base_data <- base_data %>% select(-trt, -y)
+  
+  #=============================================================================
+  
+  ## Simulate 10,000 runs
+  N_runs <- 1e4
+  sims <- Q(run_sim_wrapper, 
+            scenario=rep(scenarios, each=N_runs), 
+            const = list(base_data = base_data), 
+            n_jobs = 200)
+  sims <- do.call(rbind, sims)
+  
+  var_methods = list("ye_beeca_var",
+                     "ge_var")
+  
+  # PATE with conditional coverage (conditional on X)
+  post_sims_pate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_pate))
+  results_pate <- purrr::map_df(post_sims_pate, sum_sims)
+  results_pate$seed <- rseed
+  results_pate$estimand <- "PATE"
+  
+  
+  # CPATE with conditional coverage (conditional on X)
+  post_sims_cpate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_cpate))
+  results_cpate <- purrr::map_df(post_sims_cpate, sum_sims)
+  results_cpate$seed <- rseed
+  results_cpate$estimand <- "CPATE"
+  
+  
+  all_res_pate[[i]] <- results_pate
+  all_res_cpate[[i]] <- results_cpate
+  
+  i <- i + 1
+
+}
+
+multi_res_pate <- do.call(rbind, all_res_pate)
+multi_res_cpate <- do.call(rbind, all_res_cpate)
+
+
+```
+
+Results: Conditional coverage on X, for PATE estimand
+
+```{r}
+multi_res_pate
+```
+
+Results: Conditional coverage on X, for CPATE estimand
+
+```{r}
+multi_res_cpate
+```
+
+
+### Coverage conditional on A, X
+
+We also evaluate conditional coverage probabilities by fixing both $X$ and $A$. Again, two random seeds were chosen to illustrate that the conditional coverage probabilities can be both above and below the nominal level depending on the specific $A$, $X$.
+
+```{r}
+
+## Conditional coverage (conditional on X and TRT)
+## PATE, CPATE
+
+#===============================================================================
+## simulate a base dataset that remains fixed
+## we fix X and TRT, but simulate y
+## (achieve this by dropping y from base_data so it is re-simulated each time)
+
+all_res_pate <- list()
+all_res_cpate <- list()
+i <- 1
+
+for (rseed in c(274, 44)) {
+
+  set.seed(rseed)
+  
+  base_data <- sim_dat(scenarios[[1]])
+  base_data <- base_data %>% select(-y)
+  
+  #=============================================================================
+  
+  ## Simulate 10,000 runs
+  N_runs <- 1e4
+  sims <- Q(run_sim_wrapper, 
+            scenario=rep(scenarios, each=N_runs), 
+            const = list(base_data = base_data), 
+            n_jobs = 200)
+  sims <- do.call(rbind, sims)
+  
+  
+  var_methods = list("ye_beeca_var",
+                     "ge_var")
+  
+  # PATE with conditional coverage (conditional on X, TRT)
+  post_sims_pate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_pate))
+  results_pate <- purrr::map_df(post_sims_pate, sum_sims)
+  results_pate$seed <- rseed
+  results_pate$estimand <- "PATE"
+  
+  
+  # CPATE with conditional coverage (conditional on X, TRT)
+  post_sims_cpate <- purrr::map(var_methods, post_sims, sims = sims %>% rename(true_diff = true_diff_cpate))
+  results_cpate <- purrr::map_df(post_sims_cpate, sum_sims)
+  results_cpate$seed <- rseed
+  results_cpate$estimand <- "CPATE"
+  
+  
+  all_res_pate[[i]] <- results_pate
+  all_res_cpate[[i]] <- results_cpate
+  
+  i <- i + 1
+
+}
+
+multi_res_pate <- do.call(rbind, all_res_pate)
+
+multi_res_cpate <- do.call(rbind, all_res_cpate)
+
+```
+
+
+Results: Conditional coverage on A, X, for PATE estimand
+
+```{r}
+multi_res_pate
+```
+
+
+Results: Conditional coverage on A, X, for CPATE estimand
+
+```{r}
+multi_res_cpate
+```
+
+
+
