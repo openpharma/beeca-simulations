@@ -22,9 +22,10 @@ sum_sims <- function(post_sims_df){
   df_grouped <- dplyr::group_by(post_sims_df, scenario)
   
   df_sum <- dplyr::summarise(df_grouped,
-                             av_se = mean(sqrt(var)),
-                             coverage = mean(cover),
+                             av_se = mean(sqrt(var)) |> round(4),
+                             coverage = mean(cover) |> round(3),
                              # power = mean(reject),
+                             base_sd = sd(point_estimate) |> round(4),
                              method = method[1])
   
   return(as.data.frame(df_sum))
