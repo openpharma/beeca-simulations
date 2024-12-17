@@ -101,12 +101,79 @@ for (scenario in scenarios) {
                                sim_name = sim_name))
 
 }
+
+```
+
+```{r}
+
+# rename panels in plot
+facet_labeller <- c("1" = "A",
+                    "2" = "B",
+                    "3" = "C")
+
+# same limits for x and y axis
+calc_limits <- function(x,y) {
+  c(min(min(x), min(y)),
+    max(max(x), max(y)))
+}
+
+# plot for single scenario
+plot_single_sim <- function(res, name) {
   
+  df <- res %>%
+    filter(sim_name == name)
+  
+  p <- df %>%
+    ggplot(aes(x=ye_var, y=ge_var)) +
+    geom_point(size = 2) +
+    facet_wrap(vars(sim_name), 
+               labeller = labeller(sim_name = facet_labeller)) +
+    scale_color_grey() +
+    scale_shape(guide = 'none') +
+    guides(color = guide_legend(title=element_blank()),
+           shape = guide_legend(title=element_blank())) +
+    theme_bw(base_size = 14) +
+    theme(legend.text=element_text(size=12),
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank()) +
+    geom_abline(slope = 1, intercept = 0) +
+    coord_fixed(xlim = calc_limits(df$ye_var, df$ge_var),
+                ylim = calc_limits(df$ye_var, df$ge_var)) +
+    theme(aspect.ratio = 1)
+  
+  return(p)
+}
+
+
+# plot single scenarios separately then combine using cowplot
+plot_list <- lapply(unique(res$sim_name), \(x) plot_single_sim(res, x))
+
+# extra empty space for y axis label
+empty_plot <- ggplot() + theme_void()
+p <- cowplot::plot_grid(empty_plot, plotlist = plot_list, nrow = 1,
+                        rel_widths = c(0.1, 1, 1, 1))
+
+p <- p + cowplot::draw_label("Ge et al variance", x = 0, y = 0.5, angle = 90, vjust = 1.5)
+p <- p + cowplot::draw_label("Ye et al variance", x = 0.5, y = 0.2, angle = 0)
+
+p
+
+```
+
+
+```{r}
+ggsave(filename = "output/square_plot_three_scenarios_bw.pdf",
+       width = 11,
+       height = 6,
+       plot = p)
 ```
 
 
 
+
 ```{r}
+
+# Alternative plot style, ordered by Ye et al variance
 
 res_plot <- res %>%
   group_by(sim_name) %>%
@@ -144,15 +211,6 @@ p <- res_plot %>%
 
 p
 
-```
-
-
-
-```{r}
-ggsave(filename = "output/plot_three_scenarios_bw.png",
-       width = 11,
-       height = 6,
-       plot = p)
 ```
 
 
